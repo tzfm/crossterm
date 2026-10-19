@@ -280,10 +280,9 @@ fn parse_csi_keyboard_enhancement_flags(buffer: &[u8]) -> io::Result<Option<Inte
     if bits & 8 != 0 {
         flags |= KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
     }
-    // *Note*: this is not yet supported by crossterm.
-    // if bits & 16 != 0 {
-    //     flags |= KeyboardEnhancementFlags::REPORT_ASSOCIATED_TEXT;
-    // }
+    if bits & 16 != 0 {
+        flags |= KeyboardEnhancementFlags::REPORT_ASSOCIATED_TEXT;
+    }
 
     Ok(Some(InternalEvent::KeyboardEnhancementFlags(flags)))
 }
@@ -605,12 +604,28 @@ pub(crate) fn parse_csi_u_encoded_key_code(buffer: &[u8]) -> io::Result<Option<I
         }
     }
 
-    let input_event = Event::Key(KeyEvent::new_with_kind_and_state(
+    let text = split
+        .next()
+        .map(|codepoints| {
+            codepoints
+                .split(':')
+                .filter_map(|codepoint| codepoint.parse::<u32>().ok())
+                .filter_map(char::from_u32)
+                .filter(|character| !character.is_control())
+                .collect::<String>()
+        })
+        .filter(|text| !text.is_empty());
+
+    let key = KeyEvent::new_with_kind_and_state(
         keycode,
         modifiers,
         kind,
         state_from_keycode | state_from_modifiers,
-    ));
+    );
+    let input_event = match text {
+        Some(text) => Event::KeyWithText { key, text },
+        None => Event::Key(key),
+    };
 
     Ok(Some(InternalEvent::Event(input_event)))
 }
@@ -1414,6 +1429,46 @@ mod tests {
             Some(InternalEvent::Event(Event::Key(KeyEvent::new(
                 KeyCode::Char('a'),
                 KeyModifiers::ALT | KeyModifiers::CONTROL
+            )))),
+        );
+    }
+
+    #[test]
+    fn test_parse_csi_u_encoded_key_code_with_associated_text() {
+        assert_eq!(
+            parse_csi_u_encoded_key_code(b"\x1B[52;3;36u").unwrap(),
+            Some(InternalEvent::Event(Event::KeyWithText {
+                key: KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT),
+                text: "$".into(),
+            })),
+        );
+        assert_eq!(
+            parse_csi_u_encoded_key_code(b"\x1B[0;;36u").unwrap(),
+            Some(InternalEvent::Event(Event::KeyWithText {
+                key: KeyEvent::new(KeyCode::Char('\0'), KeyModifiers::empty()),
+                text: "$".into(),
+            })),
+        );
+        assert_eq!(
+            parse_csi_u_encoded_key_code(b"\x1B[0;;97:98u").unwrap(),
+            Some(InternalEvent::Event(Event::KeyWithText {
+                key: KeyEvent::new(KeyCode::Char('\0'), KeyModifiers::empty()),
+                text: "ab".into(),
+            })),
+        );
+        assert_eq!(
+            parse_csi_u_encoded_key_code(b"\x1B[52;3u").unwrap(),
+            Some(InternalEvent::Event(Event::Key(KeyEvent::new(
+                KeyCode::Char('4'),
+                KeyModifiers::ALT
+            )))),
+        );
+        // Control text stays a key. Enter must not become printable text.
+        assert_eq!(
+            parse_csi_u_encoded_key_code(b"\x1B[13;1;13u").unwrap(),
+            Some(InternalEvent::Event(Event::Key(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::empty()
             )))),
         );
     }

@@ -7,6 +7,11 @@
   Use the standard library's [`std::io::IsTerminal`](https://doc.rust-lang.org/std/io/trait.IsTerminal.html) trait instead,
   which provides equivalent functionality.
 
+## Added ⭐
+
+- Parse the kitty keyboard protocol's associated text and expose it as
+  `Event::KeyWithText`. Add `KeyboardEnhancementFlags::REPORT_ASSOCIATED_TEXT`.
+
 ## Changed ⚙️
 
 - Migrate the crate to the Rust 2024 edition. This does not raise the MSRV beyond Rust 1.85.

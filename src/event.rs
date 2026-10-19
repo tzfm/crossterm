@@ -50,6 +50,7 @@
 //!             Event::FocusGained => println!("FocusGained"),
 //!             Event::FocusLost => println!("FocusLost"),
 //!             Event::Key(event) => println!("{:?}", event),
+//!             Event::KeyWithText { key, text } => println!("{:?} {:?}", key, text),
 //!             Event::Mouse(event) => println!("{:?}", event),
 //!             #[cfg(feature = "bracketed-paste")]
 //!             Event::Paste(data) => println!("{:?}", data),
@@ -96,6 +97,7 @@
 //!                 Event::FocusGained => println!("FocusGained"),
 //!                 Event::FocusLost => println!("FocusLost"),
 //!                 Event::Key(event) => println!("{:?}", event),
+//!                 Event::KeyWithText { key, text } => println!("{:?} {:?}", key, text),
 //!                 Event::Mouse(event) => println!("{:?}", event),
 //!                 #[cfg(feature = "bracketed-paste")]
 //!                 Event::Paste(data) => println!("Pasted {:?}", data),
@@ -269,7 +271,8 @@ bitflags! {
     ///
     /// See <https://sw.kovidgoyal.net/kitty/keyboard-protocol/#progressive-enhancement> for more information.
     ///
-    /// Alternate keys and Unicode codepoints are not yet supported by crossterm.
+    /// Alternate keys are supported. Associated text is exposed as
+    /// [`Event::KeyWithText`].
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(transparent))]
     #[derive(Debug, PartialOrd, PartialEq, Eq, Clone, Copy, Hash)]
     pub struct KeyboardEnhancementFlags: u8 {
@@ -286,10 +289,9 @@ bitflags! {
         /// Represent all keyboard events as CSI-u sequences. This is required to get repeat/release
         /// events for plain-text keys.
         const REPORT_ALL_KEYS_AS_ESCAPE_CODES = 0b0000_1000;
-        // Send the Unicode codepoint as well as the keycode.
-        //
-        // *Note*: this is not yet supported by crossterm.
-        // const REPORT_ASSOCIATED_TEXT = 0b0001_0000;
+        /// Send the text the key produced in addition to the keycode. Text arrives as
+        /// [`Event::KeyWithText`].
+        const REPORT_ASSOCIATED_TEXT = 0b0001_0000;
     }
 }
 
@@ -528,7 +530,6 @@ impl Command for PopKeyboardEnhancementFlags {
 /// Represents an event.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "derive-more", derive(IsVariant))]
-#[cfg_attr(not(feature = "bracketed-paste"), derive(Copy))]
 #[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Clone, Hash)]
 pub enum Event {
     /// The terminal gained focus
@@ -537,6 +538,13 @@ pub enum Event {
     FocusLost,
     /// A single key event with additional pressed modifiers.
     Key(KeyEvent),
+    /// A key event with the text the key produced.
+    ///
+    /// Terminals send this when
+    /// [`KeyboardEnhancementFlags::REPORT_ASSOCIATED_TEXT`] is enabled. The
+    /// key is the physical key. The text is the character or string the
+    /// layout produced for it.
+    KeyWithText { key: KeyEvent, text: String },
     /// A single mouse event with additional pressed modifiers.
     Mouse(MouseEvent),
     /// A string that was pasted into the terminal. Only emitted if bracketed paste has been
@@ -574,7 +582,13 @@ impl Event {
             Event::Key(KeyEvent {
                 kind: KeyEventKind::Press,
                 ..
-            })
+            }) | Event::KeyWithText {
+                key: KeyEvent {
+                    kind: KeyEventKind::Press,
+                    ..
+                },
+                ..
+            }
         )
     }
 
@@ -586,7 +600,13 @@ impl Event {
             Event::Key(KeyEvent {
                 kind: KeyEventKind::Release,
                 ..
-            })
+            }) | Event::KeyWithText {
+                key: KeyEvent {
+                    kind: KeyEventKind::Release,
+                    ..
+                },
+                ..
+            }
         )
     }
 
@@ -598,7 +618,13 @@ impl Event {
             Event::Key(KeyEvent {
                 kind: KeyEventKind::Repeat,
                 ..
-            })
+            }) | Event::KeyWithText {
+                key: KeyEvent {
+                    kind: KeyEventKind::Repeat,
+                    ..
+                },
+                ..
+            }
         )
     }
 
@@ -622,6 +648,7 @@ impl Event {
     pub fn as_key_event(&self) -> Option<KeyEvent> {
         match self {
             Event::Key(event) => Some(*event),
+            Event::KeyWithText { key, .. } => Some(*key),
             _ => None,
         }
     }
@@ -648,7 +675,9 @@ impl Event {
     #[inline]
     pub fn as_key_press_event(&self) -> Option<KeyEvent> {
         match self {
-            Event::Key(event) if self.is_key_press() => Some(*event),
+            Event::Key(event) | Event::KeyWithText { key: event, .. } if self.is_key_press() => {
+                Some(*event)
+            }
             _ => None,
         }
     }
@@ -657,7 +686,9 @@ impl Event {
     #[inline]
     pub fn as_key_release_event(&self) -> Option<KeyEvent> {
         match self {
-            Event::Key(event) if self.is_key_release() => Some(*event),
+            Event::Key(event) | Event::KeyWithText { key: event, .. } if self.is_key_release() => {
+                Some(*event)
+            }
             _ => None,
         }
     }
@@ -666,7 +697,9 @@ impl Event {
     #[inline]
     pub fn as_key_repeat_event(&self) -> Option<KeyEvent> {
         match self {
-            Event::Key(event) if self.is_key_repeat() => Some(*event),
+            Event::Key(event) | Event::KeyWithText { key: event, .. } if self.is_key_repeat() => {
+                Some(*event)
+            }
             _ => None,
         }
     }
